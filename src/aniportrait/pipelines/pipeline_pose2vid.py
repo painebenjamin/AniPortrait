@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import inspect
+
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Union
 
@@ -6,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+
 from diffusers import DiffusionPipeline
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.schedulers import (DDIMScheduler, DPMSolverMultistepScheduler,
@@ -16,6 +20,7 @@ from diffusers.utils import BaseOutput, is_accelerate_available
 from diffusers.utils.torch_utils import randn_tensor
 from einops import rearrange
 from tqdm import tqdm
+from PIL import Image
 from transformers import CLIPImageProcessor
 
 from aniportrait.models.mutual_self_attention import ReferenceAttentionControl
@@ -277,6 +282,32 @@ class Pose2VideoPipeline(DiffusionPipeline):
 
         return text_embeddings
 
+    def images_from_video(
+        self,
+        video: torch.Tensor,
+        rescale: bool=False
+    ) -> List[Image.Image]:
+        """
+        Convert a video tensor to a list of PIL images
+        """
+        import numpy as np
+        import torchvision
+        from einops import rearrange
+        video = rearrange(video, "b c t h w -> t b c h w")
+        height, width = video.shape[-2:]
+        outputs = []
+
+        for x in video:
+            x = torchvision.utils.make_grid(x, nrow=1)  # (c h w)
+            x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)  # (h w c)
+            if rescale:
+                x = (x + 1.0) / 2.0  # -1,1 -> 0,1
+            x = (x * 255).numpy().astype(np.uint8)
+            x = Image.fromarray(x)
+            outputs.append(x)
+
+        return outputs
+
     @torch.no_grad()
     def __call__(
         self,
@@ -289,12 +320,12 @@ class Pose2VideoPipeline(DiffusionPipeline):
         num_inference_steps,
         guidance_scale,
         num_images_per_prompt=1,
-        eta: float = 0.0,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        output_type: Optional[str] = "tensor",
-        return_dict: bool = True,
-        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-        callback_steps: Optional[int] = 1,
+        eta: float=0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
+        output_type: Optional[str]="pil",
+        return_dict: bool=True,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
+        callback_steps: Optional[int]=1,
         **kwargs,
     ):  
         # Default height and width to unet
@@ -341,7 +372,7 @@ class Pose2VideoPipeline(DiffusionPipeline):
             fusion_blocks="full",
         )
 
-        num_channels_latents = self.denoising_unet.in_channels
+        num_channels_latents = self.denoising_unet.config.in_channels
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
             num_channels_latents,
@@ -453,8 +484,10 @@ class Pose2VideoPipeline(DiffusionPipeline):
         images = self.decode_latents(latents)  # (b, c, f, h, w)
 
         # Convert to tensor
-        if output_type == "tensor":
+        if output_type not in ["numpy", "np"]:
             images = torch.from_numpy(images)
+            if output_type == "pil":
+                images = self.images_from_video(images)
 
         if not return_dict:
             return images

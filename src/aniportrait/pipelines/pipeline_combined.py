@@ -1,13 +1,23 @@
 # Inspired by https://github.com/huggingface/diffusers/blob/main/examples/community/stable_diffusion_mega.py
 from __future__ import annotations
+
+import gc
 import os
 import json
 import torch
+import logging
 import numpy as np
 
 from PIL import Image
 from typing import Union, List, Dict, Any, Optional, Callable
+from contextlib import nullcontext, ExitStack
 
+from huggingface_hub import hf_hub_download
+
+from transformers import (
+    CLIPVisionConfig,
+    CLIPVisionModelWithProjection,
+)
 from diffusers import (
     AutoencoderKL,
     DDIMScheduler,
@@ -19,10 +29,14 @@ from diffusers import (
     DiffusionPipeline
 )
 
-from huggingface_hub import hf_hub_download
-from transformers import CLIPVisionModelWithProjection
+from transformers.modeling_utils import no_init_weights
+from diffusers.utils import is_accelerate_available, is_xformers_available
 
-from aniportrait.utils import PoseHelper, get_data_dir
+if is_accelerate_available():
+    from accelerate import init_empty_weights
+    from accelerate.utils import set_module_tensor_to_device
+
+from aniportrait.utils import PoseHelper, get_data_dir, iterate_state_dict
 
 from aniportrait.audio_models.audio2mesh import Audio2MeshModel
 from aniportrait.models.unet_2d_condition import UNet2DConditionModel
@@ -33,7 +47,10 @@ from aniportrait.pipelines.pipeline_pose2img import Pose2ImagePipeline, Pose2Ima
 from aniportrait.pipelines.pipeline_pose2vid import Pose2VideoPipeline, Pose2VideoPipelineOutput
 from aniportrait.pipelines.pipeline_pose2vid_long import Pose2LongVideoPipeline
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["AniPortraitPipeline"]
+
 
 class AniPortraitPipeline(DiffusionPipeline):
     """
@@ -142,7 +159,12 @@ class AniPortraitPipeline(DiffusionPipeline):
         scheduler = DDIMScheduler(**aniportrait_config["scheduler"])
 
         # Create the models
-        with (init_empty_weights() if is_accelerate_available() else nullcontext()):
+        context = ExitStack()
+        if is_accelerate_available():
+            context.enter_context(no_init_weights())
+            context.enter_context(init_empty_weights())
+
+        with context:
             # UNets
             reference_unet = UNet2DConditionModel.from_config(aniportrait_config["reference_unet"])
             denoising_unet = UNet3DConditionModel.from_config(aniportrait_config["denoising_unet"])
@@ -153,26 +175,11 @@ class AniPortraitPipeline(DiffusionPipeline):
             # Image encoder
             image_encoder = CLIPVisionModelWithProjection(CLIPVisionConfig(**aniportrait_config["image_encoder"]))
 
-            # Guidance encoders
-            if use_depth_guidance:
-                guidance_encoder_depth = GuidanceEncoder(**aniportrait_config["guidance_encoder"])
-            else:
-                guidance_encoder_depth = None
+            # Pose Guider
+            pose_guider = PoseGuiderModel.from_config(aniportrait_config["pose_guider"])
 
-            if use_normal_guidance:
-                guidance_encoder_normal = GuidanceEncoder(**aniportrait_config["guidance_encoder"])
-            else:
-                guidance_encoder_normal = None
-
-            if use_semantic_map_guidance:
-                guidance_encoder_semantic_map = GuidanceEncoder(**aniportrait_config["guidance_encoder"])
-            else:
-                guidance_encoder_semantic_map = None
-
-            if use_dwpose_guidance:
-                guidance_encoder_dwpose = GuidanceEncoder(**aniportrait_config["guidance_encoder"])
-            else:
-                guidance_encoder_dwpose = None
+            # Audio Mesher
+            audio_mesher = Audio2MeshModel.from_config(aniportrait_config["audio_mesher"])
 
         # Load the weights
         logger.debug("Models created, loading weights...")
@@ -189,14 +196,10 @@ class AniPortraitPipeline(DiffusionPipeline):
                         set_module_tensor_to_device(vae, key, device=device, value=value)
                     elif module == "image_encoder":
                         set_module_tensor_to_device(image_encoder, key, device=device, value=value)
-                    elif module == "guidance_encoder_depth" and guidance_encoder_depth is not None:
-                        set_module_tensor_to_device(guidance_encoder_depth, key, device=device, value=value)
-                    elif module == "guidance_encoder_normal" and guidance_encoder_normal is not None:
-                        set_module_tensor_to_device(guidance_encoder_normal, key, device=device, value=value)
-                    elif module == "guidance_encoder_semantic_map" and guidance_encoder_semantic_map is not None:
-                        set_module_tensor_to_device(guidance_encoder_semantic_map, key, device=device, value=value)
-                    elif module == "guidance_encoder_dwpose" and guidance_encoder_dwpose is not None:
-                        set_module_tensor_to_device(guidance_encoder_dwpose, key, device=device, value=value)
+                    elif module == "pose_guider":
+                        set_module_tensor_to_device(pose_guider, key, device=device, value=value)
+                    elif module == "audio2mesh":
+                        set_module_tensor_to_device(audio_mesher, key, device=device, value=value)
                     else:
                         raise ValueError(f"Unknown module: {module}")
                 else:
@@ -211,14 +214,8 @@ class AniPortraitPipeline(DiffusionPipeline):
                 denoising_unet.load_state_dict(state_dicts["denoising_unet"])
                 vae.load_state_dict(state_dicts["vae"])
                 image_encoder.load_state_dict(state_dicts["image_encoder"], strict=False)
-                if guidance_encoder_depth is not None:
-                    guidance_encoder_depth.load_state_dict(state_dicts["guidance_encoder_depth"])
-                if guidance_encoder_normal is not None:
-                    guidance_encoder_normal.load_state_dict(state_dicts["guidance_encoder_normal"])
-                if guidance_encoder_semantic_map is not None:
-                    guidance_encoder_semantic_map.load_state_dict(state_dicts["guidance_encoder_semantic_map"])
-                if guidance_encoder_dwpose is not None:
-                    guidance_encoder_dwpose.load_state_dict(state_dicts["guidance_encoder_dwpose"])
+                pose_guider.load_state_dict(state_dicts["pose_guider"])
+                audio_mesher.load_state_dict(state_dicts["audio2mesh"])
                 del state_dicts
                 gc.collect()
             except KeyError as ex:
@@ -230,10 +227,8 @@ class AniPortraitPipeline(DiffusionPipeline):
             image_encoder=image_encoder,
             reference_unet=reference_unet,
             denoising_unet=denoising_unet,
-            guidance_encoder_depth=guidance_encoder_depth,
-            guidance_encoder_normal=guidance_encoder_normal,
-            guidance_encoder_semantic_map=guidance_encoder_semantic_map,
-            guidance_encoder_dwpose=guidance_encoder_dwpose,
+            pose_guider=pose_guider,
+            audio_mesher=audio_mesher,
             scheduler=scheduler,
         )
 
@@ -294,28 +289,36 @@ class AniPortraitPipeline(DiffusionPipeline):
     @torch.no_grad()
     def img2pose(
         self,
-        ref_image: Image.Image,
+        reference_image: Image.Image,
         width: Optional[int]=None,
         height: Optional[int]=None
     ) -> Image.Image:
         """
         Generates a pose image from a reference image.
         """
-        return self.pose_helper.image_to_pose(ref_image, width=width, height=height)
+        return self.pose_helper.image_to_pose(reference_image, width=width, height=height)
 
     @torch.no_grad()
     def vid2pose(
         self,
-        ref_images: List[Image.Image],
+        reference_images: List[Image.Image],
+        retarget_image: Optional[Image.Image]=None,
         width: Optional[int]=None,
         height: Optional[int]=None
     ) -> List[Image.Image]:
         """
         Generates a list of pose images from a list of reference images.
         """
+        if retarget_image is not None:
+            return self.pose_helper.images_to_pose_with_retarget(
+                reference_images,
+                retarget_image,
+                width=width,
+                height=height
+            )
         return [
-            self.img2pose(ref_image, width=width, height=height)
-            for ref_image in ref_images
+            self.img2pose(reference_image, width=width, height=height)
+            for reference_image in reference_images
         ]
 
     @torch.no_grad()
@@ -371,19 +374,20 @@ class AniPortraitPipeline(DiffusionPipeline):
     @torch.no_grad()
     def pose2img(
         self,
-        ref_image: Image.Image,
+        reference_image: Image.Image,
         pose_image: Image.Image,
-        ref_pose_image: Image.Image,
-        width: int,
-        height: int,
         num_inference_steps: int,
         guidance_scale: float,
         eta: float=0.0,
+        reference_pose_image: Optional[Image.Image]=None,
         generation: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
         output_type: Optional[str]="pil",
         return_dict: bool=True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
         callback_steps: Optional[int]=None,
+        width: Optional[int]=None,
+        height: Optional[int]=None,
+        video_length: Optional[int]=None,
         **kwargs: Any
     ) -> Pose2VideoPipelineOutput:
         """
@@ -402,10 +406,19 @@ class AniPortraitPipeline(DiffusionPipeline):
         if self.cpu_offload_gpu_id is not None:
             pipeline.enable_sequential_cpu_offload(self.cpu_offload_gpu_id)
 
+        if reference_pose_image is None:
+            reference_pose_image = self.img2pose(reference_image)
+
+        image_width, image_height = reference_image.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+
         return pipeline(
-            ref_image=ref_image,
+            ref_image=reference_image,
             pose_image=pose_image,
-            ref_pose_image=ref_pose_image,
+            ref_pose_image=reference_pose_image,
             width=width,
             height=height,
             num_inference_steps=num_inference_steps,
@@ -422,20 +435,20 @@ class AniPortraitPipeline(DiffusionPipeline):
     @torch.no_grad()
     def pose2vid(
         self,
-        ref_image: Image.Image,
+        reference_image: Image.Image,
         pose_images: List[Image.Image],
-        ref_pose_image: Image.Image,
-        width: int,
-        height: int,
-        video_length: int,
         num_inference_steps: int,
         guidance_scale: float,
         eta: float=0.0,
+        reference_pose_image: Optional[Image.Image]=None,
         generation: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
         output_type: Optional[str]="pil",
         return_dict: bool=True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
         callback_steps: Optional[int]=None,
+        width: Optional[int]=None,
+        height: Optional[int]=None,
+        video_length: Optional[int]=None,
         **kwargs: Any
     ) -> Pose2VideoPipelineOutput:
         """
@@ -454,10 +467,21 @@ class AniPortraitPipeline(DiffusionPipeline):
         if self.cpu_offload_gpu_id is not None:
             pipeline.enable_sequential_cpu_offload(self.cpu_offload_gpu_id)
 
+        if reference_pose_image is None:
+            reference_pose_image = self.img2pose(reference_image)
+
+        image_width, image_height = reference_image.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+        if video_length is None:
+            video_length = len(pose_images)
+
         return pipeline(
-            ref_image=ref_image,
+            ref_image=reference_image,
             pose_images=pose_images,
-            ref_pose_image=ref_pose_image,
+            ref_pose_image=reference_pose_image,
             width=width,
             height=height,
             video_length=video_length,
@@ -475,15 +499,12 @@ class AniPortraitPipeline(DiffusionPipeline):
     @torch.no_grad()
     def pose2vid_long(
         self,
-        ref_image: Image.Image,
+        reference_image: Image.Image,
         pose_images: List[Image.Image],
-        ref_pose_image: Image.Image,
-        width: int,
-        height: int,
-        video_length: int,
         num_inference_steps: int,
         guidance_scale: float,
         eta: float=0.0,
+        reference_pose_image: Optional[Image.Image]=None,
         generation: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
         output_type: Optional[str]="pil",
         return_dict: bool=True,
@@ -494,6 +515,9 @@ class AniPortraitPipeline(DiffusionPipeline):
         context_overlap: int=4,
         context_batch_size: int=1,
         interpolation_factor: int=1,
+        width: Optional[int]=None,
+        height: Optional[int]=None,
+        video_length: Optional[int]=None,
         **kwargs: Any
     ) -> Pose2VideoPipelineOutput:
         """
@@ -512,10 +536,21 @@ class AniPortraitPipeline(DiffusionPipeline):
         if self.cpu_offload_gpu_id is not None:
             pipeline.enable_sequential_cpu_offload(self.cpu_offload_gpu_id)
 
+        if reference_pose_image is None:
+            reference_pose_image = self.img2pose(reference_image)
+
+        image_width, image_height = reference_image.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+        if video_length is None:
+            video_length = len(pose_images)
+
         return pipeline(
-            ref_image=ref_image,
+            ref_image=reference_image,
             pose_images=pose_images,
-            ref_pose_image=ref_pose_image,
+            ref_pose_image=reference_pose_image,
             width=width,
             height=height,
             video_length=video_length,
@@ -532,5 +567,226 @@ class AniPortraitPipeline(DiffusionPipeline):
             context_overlap=context_overlap,
             context_batch_size=context_batch_size,
             interpolation_factor=interpolation_factor,
+            **kwargs
+        )
+
+    @torch.no_grad()
+    def img2img(
+        self,
+        reference_image: Image.Image,
+        pose_image: Image.Image,
+        num_inference_steps: int,
+        guidance_scale: float,
+        eta: float=0.0,
+        reference_pose_image: Optional[Image.Image]=None,
+        generation: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
+        output_type: Optional[str]="pil",
+        return_dict: bool=True,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
+        callback_steps: Optional[int]=None,
+        width: Optional[int]=None,
+        height: Optional[int]=None,
+        video_length: Optional[int]=None,
+        **kwargs: Any
+    ) -> Pose2VideoPipelineOutput:
+        """
+        Generates an image from a reference image and pose image.
+        """
+        pipeline = Pose2ImagePipeline(
+            vae=self.vae,
+            image_encoder=self.image_encoder,
+            reference_unet=self.reference_unet,
+            denoising_unet=self.denoising_unet,
+            pose_guider=self.pose_guider,
+            scheduler=self.scheduler
+        )
+        if self.vae_slicing:
+            pipeline.enable_vae_slicing()
+        if self.cpu_offload_gpu_id is not None:
+            pipeline.enable_sequential_cpu_offload(self.cpu_offload_gpu_id)
+
+        pose_image = self.img2pose(pose_image)
+        if reference_pose_image is None:
+            reference_pose_image = self.img2pose(reference_image)
+
+        image_width, image_height = reference_image.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+
+        return pipeline(
+            ref_image=reference_image,
+            pose_image=pose_image,
+            ref_pose_image=reference_pose_image,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            eta=eta,
+            generation=generation,
+            output_type=output_type,
+            return_dict=return_dict,
+            callback=callback,
+            callback_steps=callback_steps,
+            **kwargs
+        )
+
+    @torch.no_grad()
+    def audio2vid(
+        self,
+        audio: str,
+        reference_image: Image.Image,
+        num_inference_steps: int=25,
+        guidance_scale: float=3.5,
+        fps: int=30,
+        eta: float=0.0,
+        reference_pose_image: Optional[Image.Image]=None,
+        pose_reference_images: Optional[List[Image.Image]]=None,
+        generation: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
+        output_type: Optional[str]="pil",
+        return_dict: bool=True,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
+        callback_steps: Optional[int]=None,
+        context_schedule: str="uniform",
+        context_frames: int=16,
+        context_overlap: int=4,
+        context_batch_size: int=1,
+        interpolation_factor: int=1,
+        width: Optional[int]=None,
+        height: Optional[int]=None,
+        video_length: Optional[int]=None,
+        use_long_video: bool=True,
+        **kwargs: Any
+    ) -> Pose2VideoPipelineOutput:
+        """
+        Generates a video from an audio clip.
+        """
+        pose_images = self.audio2pose(
+            audio,
+            fps=fps,
+            reference_image=reference_image,
+            pose_reference_images=pose_reference_images
+        )
+
+        if use_long_video and len(pose_images) > 16 and (video_length is None or video_length > 16):
+            return self.pose2vid_long(
+                reference_image=reference_image,
+                pose_images=pose_images,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                eta=eta,
+                reference_pose_image=reference_pose_image,
+                generation=generation,
+                output_type=output_type,
+                return_dict=return_dict,
+                callback=callback,
+                callback_steps=callback_steps,
+                context_schedule=context_schedule,
+                context_frames=context_frames,
+                context_overlap=context_overlap,
+                context_batch_size=context_batch_size,
+                interpolation_factor=interpolation_factor,
+                width=width,
+                height=height,
+                video_length=video_length,
+                **kwargs
+            )
+
+        return self.pose2vid(
+            reference_image=reference_image,
+            pose_images=pose_images,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            eta=eta,
+            reference_pose_image=reference_pose_image,
+            generation=generation,
+            output_type=output_type,
+            return_dict=return_dict,
+            callback=callback,
+            callback_steps=callback_steps,
+            width=width,
+            height=height,
+            video_length=video_length,
+            **kwargs
+        )
+
+    @torch.no_grad()
+    def vid2vid(
+        self,
+        reference_image: Image.Image,
+        pose_reference_images: List[Image.Image],
+        reference_pose_image: Optional[Image.Image]=None,
+        num_inference_steps: int=25,
+        guidance_scale: float=3.5,
+        eta: float=0.0,
+        generation: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
+        output_type: Optional[str]="pil",
+        return_dict: bool=True,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
+        callback_steps: Optional[int]=None,
+        context_schedule: str="uniform",
+        context_frames: int=16,
+        context_overlap: int=4,
+        context_batch_size: int=1,
+        interpolation_factor: int=1,
+        width: Optional[int]=None,
+        height: Optional[int]=None,
+        video_length: Optional[int]=None,
+        use_long_video: bool=True,
+        **kwargs: Any
+    ) -> Pose2VideoPipelineOutput:
+        """
+        Generates a video from an audio clip.
+        """
+        image_width, image_height = reference_image.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+
+        pose_images = self.vid2pose(pose_reference_images, retarget_image=reference_image, width=width, height=height)
+        if reference_pose_image is None:
+            reference_pose_image = self.img2pose(reference_image, width=width, height=height)
+
+        if use_long_video and len(pose_images) > 16 and (video_length is None or video_length > 16):
+            return self.pose2vid_long(
+                reference_image=reference_image,
+                pose_images=pose_images,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                eta=eta,
+                reference_pose_image=reference_pose_image,
+                generation=generation,
+                output_type=output_type,
+                return_dict=return_dict,
+                callback=callback,
+                callback_steps=callback_steps,
+                context_schedule=context_schedule,
+                context_frames=context_frames,
+                context_overlap=context_overlap,
+                context_batch_size=context_batch_size,
+                interpolation_factor=interpolation_factor,
+                width=width,
+                height=height,
+                video_length=video_length,
+                **kwargs
+            )
+
+        return self.pose2vid(
+            reference_image=reference_image,
+            pose_images=pose_images,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            eta=eta,
+            reference_pose_image=reference_pose_image,
+            generation=generation,
+            output_type=output_type,
+            return_dict=return_dict,
+            callback=callback,
+            callback_steps=callback_steps,
+            width=width,
+            height=height,
+            video_length=video_length,
             **kwargs
         )

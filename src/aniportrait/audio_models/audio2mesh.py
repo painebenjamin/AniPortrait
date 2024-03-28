@@ -146,6 +146,50 @@ class Audio2MeshModel(ModelMixin, ConfigMixin):
             padding_side=padding_side,
             do_normalize=do_normalize,
             return_attention_mask=return_attention_mask,
+            attention_dropout=attention_dropout,
+            bos_token_id=bos_token_id,
+            codevector_dim=codevector_dim,
+            contrastive_logits_temperature=contrastive_logits_temperature,
+            conv_bias=conv_bias,
+            conv_dim=conv_dim,
+            conv_kernel=conv_kernel,
+            conv_stride=conv_stride,
+            ctc_loss_reduction=ctc_loss_reduction,
+            ctc_zero_infinity=ctc_zero_infinity,
+            diversity_loss_weight=diversity_loss_weight,
+            do_stable_layer_norm=do_stable_layer_norm,
+            eos_token_id=eos_token_id,
+            feat_extract_activation=feat_extract_activation,
+            feat_extract_dropout=feat_extract_dropout,
+            feat_extract_norm=feat_extract_norm,
+            feat_proj_dropout=feat_proj_dropout,
+            feat_quantizer_dropout=feat_quantizer_dropout,
+            final_dropout=final_dropout,
+            gradient_checkpointing=gradient_checkpointing,
+            hidden_act=hidden_act,
+            hidden_dropout=hidden_dropout,
+            hidden_dropout_prob=hidden_dropout_prob,
+            hidden_size=hidden_size,
+            initializer_range=initializer_range,
+            intermediate_size=intermediate_size,
+            layer_norm_eps=layer_norm_eps,
+            layerdrop=layerdrop,
+            mask_feature_length=mask_feature_length,
+            mask_feature_prob=mask_feature_prob,
+            mask_time_length=mask_time_length,
+            mask_time_prob=mask_time_prob,
+            model_type=model_type,
+            num_attention_heads=num_attention_heads,
+            num_codevector_groups=num_codevector_groups,
+            num_codevectors_per_group=num_codevectors_per_group,
+            num_conv_pos_embedding_groups=num_conv_pos_embedding_groups,
+            num_conv_pos_embeddings=num_conv_pos_embeddings,
+            num_feat_extract_layers=num_feat_extract_layers,
+            num_hidden_layers=num_hidden_layers,
+            num_negatives=num_negatives,
+            pad_token_id=pad_token_id,
+            proj_codevector_dim=proj_codevector_dim,
+            vocab_size=vocab_size
         )
         self.in_fn = nn.Linear(hidden_size, latent_dim)
         self.out_fn = nn.Linear(latent_dim, out_dim)
@@ -238,5 +282,5 @@ class Audio2MeshModel(ModelMixin, ConfigMixin):
             ).input_values
         )
         sequence_length = math.ceil(len(audio_features)/sampling_rate*fps)
-        audio_features = torch.from_numpy(audio_features).to(device=self.device, dtype=torch.float32).unsqueeze(0)
+        audio_features = torch.from_numpy(audio_features).to(device=self.device, dtype=self.in_fn.weight.dtype).unsqueeze(0)
         return audio_features, sequence_length

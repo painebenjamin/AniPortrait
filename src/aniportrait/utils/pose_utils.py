@@ -14,6 +14,10 @@ from aniportrait.utils.draw_utils import FaceMeshVisualizer
 __all__ = ["PoseHelper"]
 
 class PoseHelper:
+    """
+    Pose helper class
+    Provides methods to get pose from images and vice versa
+    """
     def __init__(self):
         self.landmark_extractor = LandmarkExtractor()
         self.visualizer = FaceMeshVisualizer()
@@ -80,6 +84,62 @@ class PoseHelper:
             ]
             return sequence, images
         return sequence
+
+    def images_to_pose_with_retarget(
+        self,
+        images: List[Image.Image],
+        retarget: Image.Image,
+        width: Optional[int]=None,
+        height: Optional[int]=None
+    ) -> List[Image.Image]:
+        """
+        Get pose sequence from the images
+        """
+        landmarks = [
+            self.get_landmarks(image)
+            for image in images
+        ]
+        # remove None values
+        landmarks = [landmark for landmark in landmarks if landmark is not None]
+        retarget_landmarks = self.get_landmarks(retarget)
+        if not retarget_landmarks:
+            raise ValueError("Retarget image does not have landmarks")
+
+        vertices_list = []
+        bs_list = []
+        trans_mat_list = []
+        for landmark in landmarks:
+            vertices_list.append(landmark["lmks3d"])
+            bs_list.append(landmark["bs"])
+            trans_mat_list.append(landmark["trans_mat"])
+
+        vertices = np.array(vertices_list)
+        bs = np.array(bs_list)
+        trans_mat = np.array(trans_mat_list)
+        min_bs_idx = np.argmin(bs.sum(1))
+
+        # Retarget
+        image_width, image_height = retarget.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+        vertices = vertices - vertices[min_bs_idx] + retarget_landmarks["lmks3d"]
+        projected_vertices = self.project_points_with_trans(
+            vertices,
+            trans_mat,
+            [width, height]
+        )
+
+        images = [
+            self.visualizer.draw_landmarks(
+                (width, height),
+                vertex,
+                normed=False
+            )
+            for vertex in projected_vertices
+        ]
+        return images
 
     def pose_sequence_to_images(
         self,
@@ -149,7 +209,10 @@ class PoseHelper:
         return smoothed_pose_seq
 
     @classmethod
-    def landmarks_to_pose_sequence(cls, landmarks: List[Dict[str, Any]]) -> np.ndarray:
+    def landmarks_to_pose_sequence(
+        cls,
+        landmarks: List[Dict[str, Any]]
+    ) -> np.ndarray:
         """
         Get pose sequence from the images
         """
@@ -257,7 +320,7 @@ class PoseHelper:
         transformation_matrix: np.ndarray,
         image_shape: Tuple[int, int]
     ) -> np.ndarray:
-        P = create_perspective_matrix(image_shape[1] / image_shape[0]).reshape(4, 4).T
+        P = cls.create_perspective_matrix(image_shape[1] / image_shape[0]).reshape(4, 4).T
         L, N, _ = points_3d.shape
         projected_points = np.zeros((L, N, 2))
         for i in range(L):
