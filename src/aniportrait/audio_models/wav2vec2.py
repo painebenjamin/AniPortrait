@@ -78,6 +78,9 @@ class PretrainedWav2Vec2Model(Wav2Vec2Model):
 
         return extract_features
 
+    def _init_weights(self, *args, **kwargs):
+        return
+
     def encode(
         self,
         extract_features,

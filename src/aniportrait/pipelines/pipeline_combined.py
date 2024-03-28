@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import os
+import re
 import json
 import torch
 import logging
@@ -243,6 +244,18 @@ class AniPortraitPipeline(DiffusionPipeline):
         else:
             logger.warning("XFormers is not available, falling back to PyTorch attention")
         return pipeline
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        *args: Any,
+        **kwargs: Any
+    ) -> AniPortraitPipeline:
+        """
+        Loads the pipeline from the pretrained model.
+        """
+        with no_init_weights():
+            return super().from_pretrained(*args, **kwargs)
 
     def enable_vae_slicing(self) -> None:
         """
