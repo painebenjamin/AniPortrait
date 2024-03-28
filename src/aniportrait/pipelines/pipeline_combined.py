@@ -37,7 +37,7 @@ if is_accelerate_available():
     from accelerate import init_empty_weights
     from accelerate.utils import set_module_tensor_to_device
 
-from aniportrait.utils import PoseHelper, get_data_dir, iterate_state_dict
+from aniportrait.utils import PoseHelper, get_data_dir, iterate_state_dict, empty_cache
 
 from aniportrait.audio_models.audio2mesh import Audio2MeshModel
 from aniportrait.models.unet_2d_condition import UNet2DConditionModel
@@ -400,7 +400,6 @@ class AniPortraitPipeline(DiffusionPipeline):
         callback_steps: Optional[int]=None,
         width: Optional[int]=None,
         height: Optional[int]=None,
-        video_length: Optional[int]=None,
         **kwargs: Any
     ) -> Pose2VideoPipelineOutput:
         """
@@ -428,7 +427,7 @@ class AniPortraitPipeline(DiffusionPipeline):
         if height is None:
             height = image_height
 
-        return pipeline(
+        result = pipeline(
             ref_image=reference_image,
             pose_image=pose_image,
             ref_pose_image=reference_pose_image,
@@ -444,6 +443,8 @@ class AniPortraitPipeline(DiffusionPipeline):
             callback_steps=callback_steps,
             **kwargs
         )
+        empty_cache()
+        return result
 
     @torch.no_grad()
     def pose2vid(
@@ -491,7 +492,7 @@ class AniPortraitPipeline(DiffusionPipeline):
         if video_length is None:
             video_length = len(pose_images)
 
-        return pipeline(
+        result = pipeline(
             ref_image=reference_image,
             pose_images=pose_images,
             ref_pose_image=reference_pose_image,
@@ -508,6 +509,8 @@ class AniPortraitPipeline(DiffusionPipeline):
             callback_steps=callback_steps,
             **kwargs
         )
+        empty_cache()
+        return result
 
     @torch.no_grad()
     def pose2vid_long(
@@ -560,7 +563,7 @@ class AniPortraitPipeline(DiffusionPipeline):
         if video_length is None:
             video_length = len(pose_images)
 
-        return pipeline(
+        result = pipeline(
             ref_image=reference_image,
             pose_images=pose_images,
             ref_pose_image=reference_pose_image,
@@ -582,12 +585,14 @@ class AniPortraitPipeline(DiffusionPipeline):
             interpolation_factor=interpolation_factor,
             **kwargs
         )
+        empty_cache()
+        return result
 
     @torch.no_grad()
     def img2img(
         self,
         reference_image: Image.Image,
-        pose_image: Image.Image,
+        pose_reference_image: Image.Image,
         num_inference_steps: int,
         guidance_scale: float,
         eta: float=0.0,
@@ -599,7 +604,6 @@ class AniPortraitPipeline(DiffusionPipeline):
         callback_steps: Optional[int]=None,
         width: Optional[int]=None,
         height: Optional[int]=None,
-        video_length: Optional[int]=None,
         **kwargs: Any
     ) -> Pose2VideoPipelineOutput:
         """
@@ -618,7 +622,7 @@ class AniPortraitPipeline(DiffusionPipeline):
         if self.cpu_offload_gpu_id is not None:
             pipeline.enable_sequential_cpu_offload(self.cpu_offload_gpu_id)
 
-        pose_image = self.img2pose(pose_image)
+        pose_image = self.img2pose(pose_reference_image)
         if reference_pose_image is None:
             reference_pose_image = self.img2pose(reference_image)
 
@@ -628,7 +632,7 @@ class AniPortraitPipeline(DiffusionPipeline):
         if height is None:
             height = image_height
 
-        return pipeline(
+        result = pipeline(
             ref_image=reference_image,
             pose_image=pose_image,
             ref_pose_image=reference_pose_image,
@@ -644,6 +648,8 @@ class AniPortraitPipeline(DiffusionPipeline):
             callback_steps=callback_steps,
             **kwargs
         )
+        empty_cache()
+        return result
 
     @torch.no_grad()
     def audio2vid(

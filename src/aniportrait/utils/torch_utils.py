@@ -5,8 +5,14 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from torch import Tensor
 
-__all__ = ["get_mask_from_lengths", "linear_interpolation"]
+__all__ = ["get_mask_from_lengths", "linear_interpolation", "empty_cache"]
 
+def empty_cache() -> None:
+    import torch
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    import gc
+    gc.collect()
 
 def get_mask_from_lengths(lengths, max_len: Optional[int] = None) -> Tensor:
     import torch
