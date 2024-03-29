@@ -99,7 +99,7 @@ aniportrait configs/inference/ref_images/solo.png --video configs/inference/vide
 ### Audio Driven
 
 ```sh
-aniportrait configs/inference/ref_images/lyl.png --audio configs/inference/video/lyl.wav --num-frames 64 --width 512 --height 512
+aniportrait configs/inference/ref_images/lyl.png --audio configs/inference/video/lyl.wav --num-frames 96 --width 512 --height 512
 ```
 *Note: remove `--num-frames 64` to match the length of the audio.*
 
