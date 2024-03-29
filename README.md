@@ -82,96 +82,83 @@ audio and a reference portrait image. You can also provide a video to achieve fa
 We recommend a python version >=3.10 and cuda version =11.7. Then build environment as follows:
 
 ```shell
-pip install -r requirements.txt
+pip install git+https://github.com/painebenjamin/aniportrait.git
 ```
-
-### Download weights
-
-All the weights should be placed under the `./pretrained_weights` direcotry. You can download weights manually as follows:
-
-1. Download our trained [weights](https://huggingface.co/ZJYang/AniPortrait/tree/main), which include four parts: `denoising_unet.pth`, `reference_unet.pth`, `pose_guider.pth`, `motion_module.pth` and `audio2mesh.pt`.
-
-2. Download pretrained weight of based models and other components: 
-    - [StableDiffusion V1.5](https://huggingface.co/runwayml/stable-diffusion-v1-5)
-    - [sd-vae-ft-mse](https://huggingface.co/stabilityai/sd-vae-ft-mse)
-    - [image_encoder](https://huggingface.co/lambdalabs/sd-image-variations-diffusers/tree/main/image_encoder)
-    - [wav2vec2-base-960h](https://huggingface.co/facebook/wav2vec2-base-960h)
-
-Finally, these weights should be orgnized as follows:
-
-```text
-./pretrained_weights/
-|-- image_encoder
-|   |-- config.json
-|   `-- pytorch_model.bin
-|-- sd-vae-ft-mse
-|   |-- config.json
-|   |-- diffusion_pytorch_model.bin
-|   `-- diffusion_pytorch_model.safetensors
-|-- stable-diffusion-v1-5
-|   |-- feature_extractor
-|   |   `-- preprocessor_config.json
-|   |-- model_index.json
-|   |-- unet
-|   |   |-- config.json
-|   |   `-- diffusion_pytorch_model.bin
-|   `-- v1-inference.yaml
-|-- wav2vec2-base-960h
-|   |-- config.json
-|   |-- feature_extractor_config.json
-|   |-- preprocessor_config.json
-|   |-- pytorch_model.bin
-|   |-- README.md
-|   |-- special_tokens_map.json
-|   |-- tokenizer_config.json
-|   `-- vocab.json
-|-- audio2mesh.pt
-|-- denoising_unet.pth
-|-- motion_module.pth
-|-- pose_guider.pth
-`-- reference_unet.pth
-```
-
-Note: If you have installed some of the pretrained models, such as `StableDiffusion V1.5`, you can specify their paths in the config file (e.g. `./config/prompts/animation.yaml`).
 
 ## Inference
 
-Here are the cli commands for running inference scripts:
+You can now use the command line utility `aniportrait`. See these for examples in this repository:
 
-**Kindly note that increasing L will lead to the creation of a longer video.**
+### Face Reenactment
 
-### Self driven
-
-```shell
-python -m scripts.pose2vid --config ./configs/prompts/animation.yaml -W 512 -H 512 -L 64
+```sh
+aniportrait configs/inference/ref_images/solo.png --video configs/inference/video/Aragaki_song.mp4 --num-frames 64 --width 512 --height 512
 ```
+*Note: remove `--num-frames 64` to match the length of the video.*
 
-You can refer the format of animation.yaml to add your own reference images or pose videos. To convert the raw video into a pose video (keypoint sequence), you can run with the following command:
+### Audio Driven
 
-```shell
-python -m scripts.vid2pose --video_path pose_video_path.mp4
+```sh
+aniportrait configs/inference/ref_images/lyl.png --audio configs/inference/video/lyl.wav --num-frames 64 --width 512 --height 512
 ```
+*Note: remove `--num-frames 64` to match the length of the audio.*
 
-### Face reenacment
+### Help
 
-```shell
-python -m scripts.vid2vid --config ./configs/prompts/animation_facereenac.yaml -W 512 -H 512 -L 64
-```
+For help, run `aniportrait --help`.
 
-Add source face videos and reference images in the animation_facereenac.yaml.
+```sh
+Usage: python -m aniportrait [OPTIONS] INPUT_IMAGE
 
-### Audio driven
+  Run AniPortrait on an input image with a video, and/or audio file. - When
+  only a video file is provided, a video-to-video (face reenactment) animation
+  is performed. - When only an audio file is provided, an audio-to-video (lip-
+  sync) animation is performed. - When both a video and audio file are
+  provided, a video-to-video animation is performed with the audio as guidance
+  for the face and mouth movements.
 
-```shell
-python -m scripts.audio2vid --config ./configs/prompts/animation_audio.yaml -W 512 -H 512 -L 64
-```
-
-Add audios and reference images in the animation_audio.yaml.
-
-You can use this command to generate a pose_temp.npy for head pose control:
-
-```shell
-python -m scripts.generate_ref_pose --ref_video ./configs/inference/head_pose_temp/pose_ref_video.mp4 --save_path ./configs/inference/head_pose_temp/pose.npy
+Options:
+  -v, --video FILE                Video file to drive the animation.
+  -a, --audio FILE                Audio file to drive the animation.
+  -fps, --frame-rate INTEGER      Video FPS. Also controls the sampling rate
+                                  of the audio. Will default to the video FPS
+                                  if a video file is provided, or 30 if not.
+  -cfg, --guidance-scale FLOAT    Guidance scale for the diffusion process.
+                                  [default: 3.5]
+  -ns, --num-inference-steps INTEGER
+                                  Number of diffusion steps.  [default: 20]
+  -cf, --context-frames INTEGER   Number of context frames to use.  [default:
+                                  16]
+  -co, --context-overlap INTEGER  Number of context frames to overlap.
+                                  [default: 4]
+  -nf, --num-frames INTEGER       An explicit number of frames to use. When
+                                  not passed, use the length of the audio or
+                                  video
+  -s, --seed INTEGER              Random seed.
+  -w, --width INTEGER             Output video width. Defaults to the input
+                                  image width.
+  -h, --height INTEGER            Output video height. Defaults to the input
+                                  image height.
+  -m, --model TEXT                HuggingFace model name.
+  -nh, --no-half                  Do not use half precision.
+  -g, --gpu-id INTEGER            GPU ID to use.
+  -sf, --single-file              Download and use a single file instead of a
+                                  directory.
+  -cf, --config-file TEXT         Config file to use when using the single-
+                                  file option. Accepts a path or a filename in
+                                  the same directory as the single file. Will
+                                  download from the repository passed in the
+                                  model option if not provided.  [default:
+                                  config.json]
+  -mf, --model-filename TEXT      The model file to download when using the
+                                  single-file option.  [default:
+                                  aniportrait.safetensors]
+  -rs, --remote-subfolder TEXT    Remote subfolder to download from when using
+                                  the single-file option.
+  -c, --cache-dir DIRECTORY       Cache directory to download to. Default uses
+                                  the huggingface cache.
+  -o, --output FILE               Output file.  [default: output.mp4]
+  --help                          Show this message and exit.
 ```
 
 ## Training
