@@ -25,10 +25,10 @@ from typing import Optional
 @click.option("--model", "-m", type=str, default="benjamin-paine/aniportrait", help="HuggingFace model name.")
 @click.option("--no-half", "-nh", is_flag=True, default=False, help="Do not use half precision.", show_default=True)
 @click.option("--gpu-id", "-g", type=int, default=0, help="GPU ID to use.")
-@click.option("--single-file", "-sf", is_flag=True, default=False, help="Download and use a single file instead of a directory.")
-@click.option("--config-file", "-cf", type=str, default="config.json", help="Config file to use when using the single-file option. Accepts a path or a filename in the same directory as the single file. Will download from the repository passed in the model option if not provided.", show_default=True)
-@click.option("--model-filename", "-mf", type=str, default="aniportrait.safetensors", help="The model file to download when using the single-file option.", show_default=True)
-@click.option("--remote-subfolder", "-rs", type=str, default=None, help="Remote subfolder to download from when using the single-file option.")
+@click.option("--model-single-file", "-sf", is_flag=True, default=False, help="Download and use a single file instead of a directory.")
+@click.option("--config-file", "-cf", type=str, default="config.json", help="Config file to use when using the model-single-file option. Accepts a path or a filename in the same directory as the single file. Will download from the repository passed in the model option if not provided.", show_default=True)
+@click.option("--model-filename", "-mf", type=str, default="aniportrait.safetensors", help="The model file to download when using the model-single-file option.", show_default=True)
+@click.option("--remote-subfolder", "-rs", type=str, default=None, help="Remote subfolder to download from when using the model-single-file option.")
 @click.option("--cache-dir", "-c", type=click.Path(exists=True, file_okay=False), help="Cache directory to download to. Default uses the huggingface cache.", default=None)
 @click.option("--output", "-o", type=click.Path(exists=False, dir_okay=False), help="Output file.", default="output.mp4", show_default=True)
 def main(
@@ -47,7 +47,7 @@ def main(
     model: str="benjamin-paine/aniportrait",
     no_half: bool=False,
     gpu_id: int=0,
-    single_file: bool=False,
+    model_single_file: bool=False,
     config_file: str="config.json",
     model_filename: str="aniportrait.safetensors",
     remote_subfolder: Optional[str]=None,
@@ -85,8 +85,8 @@ def main(
         variant = "fp16"
         torch_dtype = torch.float16
 
-    if single_file:
-        pipeline = AniPortraitPipeline.from_single_file(
+    if model_single_file:
+        pipeline = AniPortraitPipeline.from_model_single_file(
             model,
             filename=model_filename,
             config_filename=config_file,
