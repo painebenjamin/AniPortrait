@@ -242,10 +242,6 @@ class Video:
         Saves PIL image frames to a video.
         Returns the total size of the video in bytes.
         """
-        if rate is None:
-            rate = self.frame_rate
-        if rate is None:
-            raise ValueError(f"Rate cannot be None.")
         if audio_rate is None:
             audio_rate = self.audio_rate
         if path.startswith("~"):
@@ -256,11 +252,15 @@ class Video:
             os.unlink(path)
         basename, ext = os.path.splitext(os.path.basename(path))
         if ext in [".gif", ".png", ".tiff", ".webp"]:
-            frames = [frame for frame in self.frames] # type: ignore[attr-defined]
+            frames = self.frames_as_list
+            if rate is None:
+                rate = self.frame_rate
+            if rate is None:
+                raise ValueError(f"Rate cannot be None.")
             if rate > 50:
                 logger.warning(f"Rate {rate} exceeds maximum frame rate (50), clamping.")
                 rate = 50
-            frames[0].save(path, loop=0, duration=1000.0/rate, save_all=True, append_images=frames[1:])
+            self.frames[0].save(path, loop=0, duration=1000.0/rate, save_all=True, append_images=frames[1:])
             return os.path.getsize(path)
         elif ext not in [".mp4", ".ogg", ".webm"]:
             raise IOError(f"Unknown file extension {ext}")
@@ -269,7 +269,13 @@ class Video:
         from moviepy.video.io.ffmpeg_writer import ffmpeg_write_video
         import numpy as np
 
-        clip_frames = [np.array(frame) for frame in self.frames] # type: ignore[attr-defined]
+        clip_frames = [np.array(frame) for frame in self.frames_as_list] # type: ignore[attr-defined]
+
+        if rate is None:
+            rate = self.frame_rate
+        if rate is None:
+            raise ValueError(f"Rate cannot be None.")
+
         clip = ImageSequenceClip(clip_frames, fps=rate)
 
         if self.audio is not None:
@@ -339,7 +345,10 @@ class Video:
                 if divide_frames is not None and (i - frame_start) % divide_frames != 0:
                     continue
                 image.seek(i)
-                yield image.convert("RGBA")
+                if image_format is not None:
+                    yield image.convert(image_format)
+                else:
+                    yield image
                 if frame_end is not None and i >= frame_end:
                     break
             return
@@ -389,6 +398,9 @@ class Video:
         def set_rate_on_open(clip: VideoFileClip) -> None:
             nonlocal video
             video.frame_rate = clip.fps
+            if clip.audio is not None:
+                video.audio_rate = clip.audio.fps
+                video.audio = Audio(frames=clip.audio.iter_frames(), rate=clip.audio.fps)
             if on_open is not None:
                 on_open(clip)
 

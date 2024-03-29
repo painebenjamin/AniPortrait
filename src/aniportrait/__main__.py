@@ -71,7 +71,7 @@ def main(
 
     import torch
     from aniportrait.pipelines import AniPortraitPipeline
-    from aniportrait.utils import Video
+    from aniportrait.utils import Video, Audio, human_size
 
     device = (
         torch.device("cuda", index=gpu_id)
@@ -86,7 +86,7 @@ def main(
         torch_dtype = torch.float16
 
     if model_single_file:
-        pipeline = AniPortraitPipeline.from_model_single_file(
+        pipeline = AniPortraitPipeline.from_single_file(
             model,
             filename=model_filename,
             config_filename=config_file,
@@ -108,22 +108,24 @@ def main(
         pipeline.to(torch_dtype)
     pipeline.to(device)
 
+    video_container = None
     input_image = Image.open(input_image).convert("RGB")
 
     if audio:
         pose_reference_images = None
         if video:
-            pose_reference_video = Video.from_file(
+            video_container = Video.from_file(
                 video,
                 image_format="RGB",
                 maximum_frames=num_frames,
             )
-            pose_reference_images = pose_reference_video.frames_as_list
+            pose_reference_images = video_container.frames_as_list
             print(f"Loaded {len(pose_reference_images)} frames from {video}")
             if frame_rate is None:
-                frame_rate = pose_reference_video.frame_rate
+                frame_rate = video_container.frame_rate
         elif frame_rate is None:
             frame_rate = 30
+
         result = pipeline.audio2vid(
             audio,
             input_image,
@@ -141,15 +143,16 @@ def main(
             video_length=num_frames,
         )
     else:
-        pose_reference_video = Video.from_file(
+        video_container = Video.from_file(
             video,
             image_format="RGB",
             maximum_frames=num_frames,
         )
-        pose_reference_images = pose_reference_video.frames_as_list
+        pose_reference_images = video_container.frames_as_list
         print(f"Loaded {len(pose_reference_images)} frames from {video}")
         if frame_rate is None:
-            frame_rate = pose_reference_video.frame_rate
+            frame_rate = video_container.frame_rate
+
         result = pipeline.vid2vid(
             input_image,
             pose_reference_images=pose_reference_images,
@@ -163,12 +166,18 @@ def main(
             width=width,
             height=height,
         )
-    Video(
-        result.videos,
-        audio=audio if audio else video,
-        frame_rate=frame_rate
-    ).save(output)
-    click.echo(f"Wrote {len(result.videos)} frames to {output}")
+
+    # Save result
+    if video_container is None:
+        video_container = Video(result.videos, frame_rate=frame_rate)
+    else:
+        video_container.frames = result.videos
+
+    if audio:
+        video_container.audio = Audio.from_file(audio)
+
+    bytes_written = video_container.save(output)
+    click.echo(f"Wrote {len(result.videos)} frames to {output} ({human_size(bytes_written)})")
 
 if __name__ == "__main__":
     try:

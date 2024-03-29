@@ -23,7 +23,18 @@ __all__ = [
     "get_data_dir",
     "reiterator",
     "latent_friendly_image",
+    "human_size",
 ]
+
+def human_size(num_bytes: int) -> str:
+    """
+    Convert a number of bytes to a human-readable string
+    """
+    for unit in ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB"]:
+        if num_bytes < 1024:
+            return f"{num_bytes:.2f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.2f} YB"
 
 def latent_friendly_image(
     image: Union[List[Image.Image], Image.Image],
