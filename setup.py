@@ -5,6 +5,7 @@ import sys
 from setuptools import find_packages, setup
 
 deps = [
+    "click",
 	"diffusers>=0.26.0",
 	"einops>=0.4.1",
 	"imageio>=2.33.0",
@@ -31,7 +32,7 @@ deps = [
 
 setup(
     name="aniportrait",
-    version="0.1.1",  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+    version="0.1.2",  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
     description="AniPortrait: Audio-Driven Synthesis of Photorealistic Portrait Animations",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
@@ -45,6 +46,11 @@ setup(
     include_package_data=True,
     python_requires=">=3.8.0",
     install_requires=deps,
+    entry_points={
+        "console_scripts": [
+            "aniportrait = aniportrait.__main__:main"
+        ]
+    },
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",

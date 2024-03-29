@@ -13,7 +13,7 @@ import torchvision
 from einops import rearrange
 from PIL import Image
 
-from typing import TYPE_CHECKING
+from typing import Union, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -22,7 +22,23 @@ __all__ = [
     "seed_everything",
     "get_data_dir",
     "reiterator",
+    "latent_friendly_image",
 ]
+
+def latent_friendly_image(
+    image: Union[List[Image.Image], Image.Image],
+    nearest: int=8
+) -> Union[List[Image.Image], Image.Image]:
+    """
+    Resize an image or list of images to be friendly to latent space optimization
+    """
+    if isinstance(image, list):
+        return [latent_friendly_image(img, nearest) for img in image]
+    width, height = image.size
+    new_width = (width // nearest) * nearest
+    new_height = (height // nearest) * nearest
+    image = image.resize((new_width, new_height), Image.NEAREST)
+    return image
 
 def seed_everything(seed: int) -> None:
     import random

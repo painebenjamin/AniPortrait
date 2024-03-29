@@ -223,6 +223,13 @@ class Video:
         else:
             self.audio = None
 
+    @property
+    def frames_as_list(self) -> List[Image]:
+        """
+        Returns the frames as a list
+        """
+        return [frame for frame in self.frames]
+
     def save(
         self,
         path: str,
@@ -308,6 +315,7 @@ class Video:
         maximum_frames: Optional[int] = None,
         divide_frames: Optional[int] = None,
         on_open: Optional[Callable[[VideoFileClip], None]] = None,
+        image_format: Optional[str] = None,
     ) -> Iterator[Image]:
         """
         Starts a video capture and yields PIL images for each frame.
@@ -319,7 +327,7 @@ class Video:
 
         i = 0
         frame_start = 0 if skip_frames is None else skip_frames
-        frame_end = None if maximum_frames is None else frame_start + (maximum_frames * (1 if not divide_frames else divide_frames)) - 1
+        frame_end = None if maximum_frames is None else frame_start + (maximum_frames * (1 if not divide_frames else divide_frames))
 
         basename, ext = os.path.splitext(os.path.basename(path))
         if ext in [".gif", ".png", ".apng", ".tiff", ".webp", ".avif"]:
@@ -351,7 +359,11 @@ class Video:
             if divide_frames is not None and (i - frame_start) % divide_frames != 0:
                 continue
 
-            yield Image.fromarray(frame)
+            pil_image = Image.fromarray(frame)
+            if image_format is not None:
+                pil_image = pil_image.convert(image_format)
+
+            yield pil_image
 
             if frame_end is not None and i >= frame_end:
                 break
@@ -367,6 +379,7 @@ class Video:
         maximum_frames: Optional[int] = None,
         divide_frames: Optional[int] = None,
         on_open: Optional[Callable[[VideoFileClip], None]] = None,
+        image_format: Optional[str] = None,
     ) -> Video:
         """
         Uses Video.frames_from_file and instantiates a Video object.
@@ -386,6 +399,7 @@ class Video:
                 divide_frames=divide_frames,
                 maximum_frames=maximum_frames,
                 on_open=set_rate_on_open,
+                image_format=image_format
             )
         )
         return video

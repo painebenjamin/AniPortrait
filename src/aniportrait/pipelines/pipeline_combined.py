@@ -764,7 +764,12 @@ class AniPortraitPipeline(DiffusionPipeline):
         if height is None:
             height = image_height
 
-        pose_images = self.vid2pose(pose_reference_images, retarget_image=reference_image, width=width, height=height)
+        pose_images = self.vid2pose(
+            pose_reference_images,
+            retarget_image=reference_image,
+            width=width,
+            height=height
+        )
         if reference_pose_image is None:
             reference_pose_image = self.img2pose(reference_image, width=width, height=height)
 

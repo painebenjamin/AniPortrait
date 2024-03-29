@@ -72,7 +72,17 @@ class PoseHelper:
             for image in images
         ]
         # remove None values
-        landmarks = [landmark for landmark in landmarks if landmark is not None]
+        def closest_to(index: int) -> Dict[str, Any]:
+            for i in range(1, len(landmarks)):
+                if index - i >= 0 and landmarks[index - i] is not None:
+                    return landmarks[index - i]
+                if index + i < len(landmarks) and landmarks[index + i] is not None:
+                    return landmarks[index + i]
+            raise ValueError("No valid landmarks found")
+        landmarks = [
+            landmark if landmark is not None else closest_to(i)
+            for i, landmark in enumerate(landmarks)
+        ]
         sequence = self.landmarks_to_pose_sequence(landmarks)
         if fps is not None and new_fps is not None:
             sequence = self.interpolate_pose_sequence(sequence, fps, new_fps)
@@ -100,7 +110,17 @@ class PoseHelper:
             for image in images
         ]
         # remove None values
-        landmarks = [landmark for landmark in landmarks if landmark is not None]
+        def closest_to(index: int) -> Dict[str, Any]:
+            for i in range(1, len(landmarks)):
+                if index - i >= 0 and landmarks[index - i] is not None:
+                    return landmarks[index - i]
+                if index + i < len(landmarks) and landmarks[index + i] is not None:
+                    return landmarks[index + i]
+            raise ValueError("No valid landmarks found")
+        landmarks = [
+            landmark if landmark is not None else closest_to(i)
+            for i, landmark in enumerate(landmarks)
+        ]
         retarget_landmarks = self.get_landmarks(retarget)
         if not retarget_landmarks:
             raise ValueError("Retarget image does not have landmarks")
