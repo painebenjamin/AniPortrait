@@ -55,10 +55,7 @@ def main(
     output: str="output.mp4",
 ) -> None:
     """
-    Run AniPortrait on an input image with a video, and/or audio file.
-    - When only a video file is provided, a video-to-video (face reenactment) animation is performed.
-    - When only an audio file is provided, an audio-to-video (lip-sync) animation is performed.
-    - When both a video and audio file are provided, a video-to-video animation is performed with the audio as guidance for the face and mouth movements.
+    Run AniPortrait on an input image with a video, and/or audio file. When only a video file is provided, a video-to-video (face reenactment) animation is performed. When only an audio file is provided, an audio-to-video (lip-sync) animation is performed. When both a video and audio file are provided, a video-to-video animation is performed with the audio as guidance for the face and mouth movements.
     """
     if not video and not audio:
         raise ValueError("You must provide either a video or audio file (or both.)")
