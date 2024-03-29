@@ -108,7 +108,7 @@ aniportrait configs/inference/ref_images/lyl.png --audio configs/inference/video
 For help, run `aniportrait --help`.
 
 ```sh
-Usage: python -m aniportrait [OPTIONS] INPUT_IMAGE
+Usage: aniportrait [OPTIONS] INPUT_IMAGE
 
   Run AniPortrait on an input image with a video, and/or audio file. - When
   only a video file is provided, a video-to-video (face reenactment) animation
