@@ -3,7 +3,6 @@ from aniportrait.utils.utils import *
 from aniportrait.utils.pipeline_utils import *
 from aniportrait.utils.context_utils import *
 from aniportrait.utils.face_landmark_utils import *
-from aniportrait.utils.audio_utils import *
 from aniportrait.utils.pose_utils import *
 from aniportrait.utils.draw_utils import *
 from aniportrait.utils.mp_utils import *

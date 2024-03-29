@@ -254,7 +254,10 @@ class AniPortraitPipeline(DiffusionPipeline):
         """
         Loads the pipeline from the pretrained model.
         """
-        with no_init_weights():
+        context = ExitStack()
+        if is_accelerate_available():
+            context.enter_context(no_init_weights()) # Prevent wav2vec2 zero-initialization
+        with context:
             return super().from_pretrained(*args, **kwargs)
 
     def enable_vae_slicing(self) -> None:

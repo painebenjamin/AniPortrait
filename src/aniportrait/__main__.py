@@ -113,8 +113,13 @@ def main(
     if audio:
         pose_reference_images = None
         if video:
-            pose_reference_video = Video(video)
+            pose_reference_video = Video.from_file(
+                video,
+                image_format="RGB",
+                maximum_frames=num_frames,
+            )
             pose_reference_images = pose_reference_video.frames_as_list
+            print(f"Loaded {len(pose_reference_images)} frames from {video}")
             if frame_rate is None:
                 frame_rate = pose_reference_video.frame_rate
         elif frame_rate is None:
