@@ -2,6 +2,7 @@
 from typing import Any, Dict, Optional
 
 import torch
+import traceback
 from einops import rearrange
 
 from aniportrait.models.attention import (
@@ -29,6 +30,7 @@ class ReferenceAttentionControl:
         reference_adain=False,
         fusion_blocks="midup",
         batch_size=1,
+        animated_reference=False,
     ) -> None:
         # 10. Modify self attention and group norm
         self.unet = unet
@@ -37,6 +39,7 @@ class ReferenceAttentionControl:
         self.reference_attn = reference_attn
         self.reference_adain = reference_adain
         self.fusion_blocks = fusion_blocks
+        self.animated_reference = animated_reference
         self.register_reference_hooks(
             mode,
             do_classifier_free_guidance,
@@ -74,6 +77,8 @@ class ReferenceAttentionControl:
         fusion_blocks = fusion_blocks
         num_images_per_prompt = num_images_per_prompt
         dtype = dtype
+        animated_reference = self.animated_reference
+
         if do_classifier_free_guidance:
             uc_mask = (
                 torch.Tensor(
@@ -100,6 +105,7 @@ class ReferenceAttentionControl:
             cross_attention_kwargs: Dict[str, Any] = None,
             class_labels: Optional[torch.LongTensor] = None,
             video_length=None,
+            context_frames=None,
         ):
             if self.use_ada_layer_norm:  # False
                 norm_hidden_states = self.norm1(hidden_states, timestep)
@@ -135,7 +141,7 @@ class ReferenceAttentionControl:
                 )
             else:
                 if MODE == "write":
-                    self.bank.append(norm_hidden_states.clone())
+                    self.bank.append(norm_hidden_states.clone().detach().cpu())
                     attn_output = self.attn1(
                         norm_hidden_states,
                         encoder_hidden_states=encoder_hidden_states
@@ -145,12 +151,28 @@ class ReferenceAttentionControl:
                         **cross_attention_kwargs,
                     )
                 if MODE == "read":
+                    if animated_reference and len(self.bank) > 1:
+                        if context_frames is None:
+                            combined_features = torch.cat([d.to(norm_hidden_states.device).unsqueeze(1) for d in self.bank[:video_length]], dim=1)
+                        else:
+                            combined_features = torch.cat([self.bank[c].to(norm_hidden_states.device).unsqueeze(1) for c in context_frames[0]], dim=1)
+                        num_features = combined_features.shape[1]
+                        if num_features < video_length:
+                            mirrored_features = torch.cat([combined_features, torch.flip(combined_features, dim=1)[:, 1:-1]], dim=1)
+                            mirrored_features_length = mirrored_features.shape[1]
+                            bank_fea = [
+                                mirrored_features.repeat(1, video_length // mirrored_features_length, 1, 1)
+                            ]
+                        else:
+                            bank_fea = [combined_features]
+                    else:
+                        bank_fea = [
+                            d.to(norm_hidden_states.device).unsqueeze(1).repeat(1, video_length, 1, 1)
+                            for d in self.bank
+                        ]
                     bank_fea = [
-                        rearrange(
-                            d.unsqueeze(1).repeat(1, video_length, 1, 1),
-                            "b t l c -> (b t) l c",
-                        )
-                        for d in self.bank
+                        rearrange(d, "b t l c -> (b t) l c")
+                        for d in bank_fea
                     ]
                     modify_norm_hidden_states = torch.cat(
                         [norm_hidden_states] + bank_fea, dim=1

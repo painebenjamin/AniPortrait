@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 __all__ = ["Audio", "Video"]
 
 class Audio:
+    """
+    Provides helper methods for audio
+    """
     def __init__(
         self,
         frames: Iterable[Tuple[float]],
@@ -26,6 +29,13 @@ class Audio:
     ) -> None:
         self.frames = reiterator(frames)
         self.rate = rate
+
+    @property
+    def frames_as_list(self) -> List[Tuple[float]]:
+        """
+        Returns the audio frames as a list
+        """
+        return [frame for frame in self.frames]
 
     def get_clip(
         self,
@@ -269,7 +279,10 @@ class Video:
         from moviepy.video.io.ffmpeg_writer import ffmpeg_write_video
         import numpy as np
 
-        clip_frames = [np.array(frame) for frame in self.frames_as_list] # type: ignore[attr-defined]
+        clip_frames = [
+            np.array(frame.convert("RGB"))
+            for frame in self.frames_as_list
+        ] # type: ignore[attr-defined]
 
         if rate is None:
             rate = self.frame_rate

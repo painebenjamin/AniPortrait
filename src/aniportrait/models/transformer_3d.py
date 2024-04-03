@@ -104,7 +104,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         hidden_states,
         encoder_hidden_states=None,
         timestep=None,
-        return_dict: bool = True,
+        context_frames=None,
+        return_dict: bool=True,
     ):
         # Input
         assert (
@@ -141,6 +142,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                 encoder_hidden_states=encoder_hidden_states,
                 timestep=timestep,
                 video_length=video_length,
+                context_frames=context_frames,
             )
 
         # Output

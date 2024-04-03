@@ -21,7 +21,13 @@ class PoseHelper:
     def __init__(self):
         self.landmark_extractor = LandmarkExtractor()
         self.visualizer = FaceMeshVisualizer()
-    
+
+    def set_fps(self, fps: int) -> None:
+        """
+        Set fps for the helper
+        """
+        self.landmark_extractor.set_fps(fps)
+
     def get_landmarks(self, image: Image.Image) -> Optional[Dict[str, Any]]:
         """
         Get landmarks from the image
@@ -57,6 +63,29 @@ class PoseHelper:
             return None
         return self.draw_landmarks(width, height, landmarks)
 
+    def image_to_mask(
+        self,
+        image: Image.Image,
+        width: Optional[int]=None,
+        height: Optional[int]=None
+    ) -> Optional[Image.Image]:
+        """
+        Get pose from the image
+        """
+        image_width, image_height = image.size
+        if width is None:
+            width = image_width
+        if height is None:
+            height = image_height
+        landmarks = self.get_landmarks(image)
+        if landmarks is None:
+            return None
+        return self.visualizer.draw_face_mask(
+            (width, height),
+            landmarks["lmks"].astype(np.float32),
+            normed=True
+        )
+
     def images_to_pose_sequence(
         self,
         images: List[Image.Image],
@@ -79,13 +108,17 @@ class PoseHelper:
                 if index + i < len(landmarks) and landmarks[index + i] is not None:
                     return landmarks[index + i]
             raise ValueError("No valid landmarks found")
+
         landmarks = [
             landmark if landmark is not None else closest_to(i)
             for i, landmark in enumerate(landmarks)
         ]
+
         sequence = self.landmarks_to_pose_sequence(landmarks)
+
         if fps is not None and new_fps is not None:
             sequence = self.interpolate_pose_sequence(sequence, fps, new_fps)
+
         if include_images:
             width, height = images[0].size
             images = [
@@ -117,10 +150,12 @@ class PoseHelper:
                 if index + i < len(landmarks) and landmarks[index + i] is not None:
                     return landmarks[index + i]
             raise ValueError("No valid landmarks found")
+
         landmarks = [
             landmark if landmark is not None else closest_to(i)
             for i, landmark in enumerate(landmarks)
         ]
+
         retarget_landmarks = self.get_landmarks(retarget)
         if not retarget_landmarks:
             raise ValueError("Retarget image does not have landmarks")
@@ -144,6 +179,7 @@ class PoseHelper:
             width = image_width
         if height is None:
             height = image_height
+
         vertices = vertices - vertices[min_bs_idx] + retarget_landmarks["lmks3d"]
         projected_vertices = self.project_points_with_trans(
             vertices,
@@ -182,6 +218,35 @@ class PoseHelper:
         )
         images = [
             self.visualizer.draw_landmarks(
+                (width, height),
+                projected_vertices[i],
+                normed=False
+            )
+            for i in range(sequence_length)
+        ]
+        return images
+
+    def pose_sequence_to_masks(
+        self,
+        pred_pose_seq: np.ndarray,
+        pose_sequence: np.ndarray,
+        translation_matrix: np.ndarray,
+        width: int,
+        height: int,
+    ) -> List[Image.Image]:
+        """
+        Get images from the pose sequence
+        """
+        sequence_length = pred_pose_seq.shape[0]
+        pose_sequence = self.bounce_pose_to_sequence_length(pose_sequence, sequence_length)
+        projected_vertices = self.project_points(
+            pred_pose_seq,
+            translation_matrix,
+            pose_sequence,
+            (width, height)
+        )
+        images = [
+            self.visualizer.draw_face_mask(
                 (width, height),
                 projected_vertices[i],
                 normed=False

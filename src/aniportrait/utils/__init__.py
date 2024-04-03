@@ -1,4 +1,5 @@
 from aniportrait.utils.ckpt_utils import *
+from aniportrait.utils.color_utils import *
 from aniportrait.utils.utils import *
 from aniportrait.utils.pipeline_utils import *
 from aniportrait.utils.context_utils import *

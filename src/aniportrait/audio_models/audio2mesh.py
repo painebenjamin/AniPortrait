@@ -250,7 +250,10 @@ class Audio2MeshModel(ModelMixin, ConfigMixin):
         self,
         audio_path: str,
         sampling_rate: int=16000,
-        fps: int=30
+        fps: int=30,
+        leading_seconds_silence: float=0.0,
+        trailing_seconds_silence: float=0.0,
+        pitch_shift: float=0.0
     ) -> torch.Tensor:
         """
         Infer the model from an audio file
@@ -258,8 +261,16 @@ class Audio2MeshModel(ModelMixin, ConfigMixin):
         audio_features, sequence_length = self.get_audio_features(
             audio_path,
             sampling_rate=sampling_rate,
-            fps=fps
+            fps=fps,
+            pitch_shift=pitch_shift
         )
+        if leading_seconds_silence > 0 or trailing_seconds_silence > 0:
+            audio_features = torch.cat([
+                torch.zeros((1, int(leading_seconds_silence * sampling_rate)), device=audio_features.device, dtype=audio_features.dtype),
+                audio_features,
+                torch.zeros((1, int(trailing_seconds_silence * sampling_rate)), device=audio_features.device, dtype=audio_features.dtype)
+            ], dim=1)
+            sequence_length += int((leading_seconds_silence + trailing_seconds_silence) * fps)
         return self.infer(audio_features, sequence_length)
 
     def get_audio_features(
@@ -267,6 +278,7 @@ class Audio2MeshModel(ModelMixin, ConfigMixin):
         audio_path: str,
         sampling_rate: int=16000,
         fps: int=30,
+        pitch_shift: float=0.0
     ) -> Tuple[torch.Tensor, int]:
         """
         Get audio embeddings from an audio file.
@@ -275,6 +287,12 @@ class Audio2MeshModel(ModelMixin, ConfigMixin):
             audio_path,
             sr=sampling_rate
         )
+        if pitch_shift != 0:
+            speech_array = librosa.effects.pitch_shift(
+                speech_array,
+                sr=sampling_rate,
+                n_steps=pitch_shift
+            )
         audio_features = np.squeeze(
             self.feature_extractor(
                 speech_array,

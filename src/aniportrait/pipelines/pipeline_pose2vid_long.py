@@ -32,6 +32,9 @@ from aniportrait.utils import get_tensor_interpolation_method, get_context_sched
 
 class Pose2LongVideoPipeline(DiffusionPipeline):
     _optional_components = []
+    _exclude_from_cpu_offload = ["pose_guider"]
+
+    model_cpu_offload_seq = "image_encoder->reference_unet->denoising_unet->vae"
 
     def __init__(
         self,
@@ -76,38 +79,13 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
     def disable_vae_slicing(self):
         self.vae.disable_slicing()
 
-    def enable_sequential_cpu_offload(self, gpu_id=0):
-        if is_accelerate_available():
-            from accelerate import cpu_offload
-        else:
-            raise ImportError("Please install accelerate via `pip install accelerate`")
-
-        device = torch.device(f"cuda:{gpu_id}")
-
-        for cpu_offloaded_model in [self.unet, self.text_encoder, self.vae]:
-            if cpu_offloaded_model is not None:
-                cpu_offload(cpu_offloaded_model, device)
-
-    @property
-    def _execution_device(self):
-        if self.device != torch.device("meta") or not hasattr(self.unet, "_hf_hook"):
-            return self.device
-        for module in self.unet.modules():
-            if (
-                hasattr(module, "_hf_hook")
-                and hasattr(module._hf_hook, "execution_device")
-                and module._hf_hook.execution_device is not None
-            ):
-                return torch.device(module._hf_hook.execution_device)
-        return self.device
-
     def decode_latents(self, latents):
         video_length = latents.shape[2]
         latents = 1 / 0.18215 * latents
         latents = rearrange(latents, "b c f h w -> (b f) c h w")
         # video = self.vae.decode(latents).sample
         video = []
-        for frame_idx in tqdm(range(latents.shape[0])):
+        for frame_idx in tqdm(range(latents.shape[0]), desc="Decoding Latents"):
             video.append(self.vae.decode(latents[frame_idx : frame_idx + 1]).sample)
         video = torch.cat(video)
         video = rearrange(video, "(b f) c h w -> b c f h w", f=video_length)
@@ -172,114 +150,6 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.scheduler.init_noise_sigma
         return latents
-
-    def _encode_prompt(
-        self,
-        prompt,
-        device,
-        num_videos_per_prompt,
-        do_classifier_free_guidance,
-        negative_prompt,
-    ):
-        batch_size = len(prompt) if isinstance(prompt, list) else 1
-
-        text_inputs = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            truncation=True,
-            return_tensors="pt",
-        )
-        text_input_ids = text_inputs.input_ids
-        untruncated_ids = self.tokenizer(
-            prompt, padding="longest", return_tensors="pt"
-        ).input_ids
-
-        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
-            text_input_ids, untruncated_ids
-        ):
-            removed_text = self.tokenizer.batch_decode(
-                untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1]
-            )
-
-        if (
-            hasattr(self.text_encoder.config, "use_attention_mask")
-            and self.text_encoder.config.use_attention_mask
-        ):
-            attention_mask = text_inputs.attention_mask.to(device)
-        else:
-            attention_mask = None
-
-        text_embeddings = self.text_encoder(
-            text_input_ids.to(device),
-            attention_mask=attention_mask,
-        )
-        text_embeddings = text_embeddings[0]
-
-        # duplicate text embeddings for each generation per prompt, using mps friendly method
-        bs_embed, seq_len, _ = text_embeddings.shape
-        text_embeddings = text_embeddings.repeat(1, num_videos_per_prompt, 1)
-        text_embeddings = text_embeddings.view(
-            bs_embed * num_videos_per_prompt, seq_len, -1
-        )
-
-        # get unconditional embeddings for classifier free guidance
-        if do_classifier_free_guidance:
-            uncond_tokens: List[str]
-            if negative_prompt is None:
-                uncond_tokens = [""] * batch_size
-            elif type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif isinstance(negative_prompt, str):
-                uncond_tokens = [negative_prompt]
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-            else:
-                uncond_tokens = negative_prompt
-
-            max_length = text_input_ids.shape[-1]
-            uncond_input = self.tokenizer(
-                uncond_tokens,
-                padding="max_length",
-                max_length=max_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-
-            if (
-                hasattr(self.text_encoder.config, "use_attention_mask")
-                and self.text_encoder.config.use_attention_mask
-            ):
-                attention_mask = uncond_input.attention_mask.to(device)
-            else:
-                attention_mask = None
-
-            uncond_embeddings = self.text_encoder(
-                uncond_input.input_ids.to(device),
-                attention_mask=attention_mask,
-            )
-            uncond_embeddings = uncond_embeddings[0]
-
-            # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
-            seq_len = uncond_embeddings.shape[1]
-            uncond_embeddings = uncond_embeddings.repeat(1, num_videos_per_prompt, 1)
-            uncond_embeddings = uncond_embeddings.view(
-                batch_size * num_videos_per_prompt, seq_len, -1
-            )
-
-            # For classifier free guidance, we need to do two forward passes.
-            # Here we concatenate the unconditional and text embeddings into a single batch
-            # to avoid doing two forward passes
-            text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
-
-        return text_embeddings
 
     def interpolate_latents(
         self, latents: torch.Tensor, interpolation_factor: int, device
@@ -364,18 +234,19 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
         num_inference_steps,
         guidance_scale,
         num_images_per_prompt=1,
-        eta: float = 0.0,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        output_type: Optional[str] = "tensor",
-        return_dict: bool = True,
-        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-        callback_steps: Optional[int] = 1,
+        eta: float=0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]]=None,
+        output_type: Optional[str]="pil",
+        return_dict: bool=True,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]]=None,
+        callback_steps: Optional[int]=1,
         context_schedule="uniform",
         context_frames=16,
         context_stride=1,
         context_overlap=4,
         context_batch_size=1,
         interpolation_factor=1,
+        clip_processing_size=224,
         **kwargs,
     ):
         # Default height and width to unet
@@ -383,8 +254,17 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
         width = width or self.unet.config.sample_size * self.vae_scale_factor
 
         device = self._execution_device
-
         do_classifier_free_guidance = guidance_scale > 1.0
+        animated_reference = isinstance(ref_image, list)
+        if animated_reference:
+            ref_image = ref_image[:video_length]
+            num_ref_images = len(ref_image)
+            if num_ref_images < video_length:
+                # Reflect the animation - first add mirror
+                ref_image += [ref_image[i].copy() for i in range(num_ref_images - 2, 0, -1)]
+                while len(ref_image) < video_length:
+                    ref_image += [image.copy() for image in ref_image]
+                ref_image = ref_image[:video_length]
 
         # Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -392,27 +272,13 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
 
         batch_size = 1
 
-        # Prepare clip image embeds
-        clip_image = self.clip_image_processor.preprocess(
-            ref_image.resize((224, 224)), return_tensors="pt"
-        ).pixel_values
-        clip_image_embeds = self.image_encoder(
-            clip_image.to(device, dtype=self.image_encoder.dtype)
-        ).image_embeds
-        encoder_hidden_states = clip_image_embeds.unsqueeze(1)
-        uncond_encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
-
-        if do_classifier_free_guidance:
-            encoder_hidden_states = torch.cat(
-                [uncond_encoder_hidden_states, encoder_hidden_states], dim=0
-            )
-
         reference_control_writer = ReferenceAttentionControl(
             self.reference_unet,
             do_classifier_free_guidance=do_classifier_free_guidance,
             mode="write",
             batch_size=batch_size,
             fusion_blocks="full",
+            animated_reference=animated_reference,
         )
         reference_control_reader = ReferenceAttentionControl(
             self.denoising_unet,
@@ -420,32 +286,82 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
             mode="read",
             batch_size=batch_size,
             fusion_blocks="full",
+            animated_reference=animated_reference,
         )
 
         num_channels_latents = self.denoising_unet.config.in_channels
+
+        # Prepare extra step kwargs
+        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+
+        # Prepare ref image latents
+        if animated_reference:
+            encoder_hidden_states = torch.cat([
+                self.image_encoder(
+                    self.clip_image_processor.preprocess(image.resize((224, 224)), return_tensors="pt").pixel_values.to(device, dtype=self.image_encoder.dtype)
+                ).image_embeds.unsqueeze(1)
+                for image in tqdm(ref_image, desc="Encoding Reference Images (CLIP)")
+            ], dim=1) # (1, f, c, l)
+            latent_shape = (
+                video_length,
+                num_channels_latents,
+                height // self.vae_scale_factor,
+                width // self.vae_scale_factor,
+            )
+            ref_image_latents = torch.zeros(
+                latent_shape,
+                device=device,
+                dtype=self.vae.dtype
+            )
+            num_ref_images = len(ref_image)
+            for i, ref_image_frame in tqdm(list(enumerate(ref_image)), desc="Encoding Reference Images (VAE)"):
+                ref_image_tensor = self.ref_image_processor.preprocess(
+                    ref_image_frame, height=height, width=width
+                )
+                ref_image_tensor = ref_image_tensor.to(
+                    dtype=self.vae.dtype, device=device
+                )
+                ref_image_latents[i] = self.vae.encode(ref_image_tensor).latent_dist.mean
+            if num_ref_images < video_length:
+                ref_image_latents[num_ref_images:] = ref_image_latents[num_ref_images - 1].unsqueeze(0).repeat(video_length - num_ref_images, 1, 1, 1)
+            ref_image_latents = ref_image_latents.unsqueeze(1) * 0.18215  # (f, b, 4, h, w)
+        else:
+            # Prepare clip image embeds
+            clip_image = self.clip_image_processor.preprocess(
+                (ref_image[0] if isinstance(ref_image, list) else ref_image).resize(
+                    (clip_processing_size, clip_processing_size)
+                ), return_tensors="pt"
+            ).pixel_values
+            clip_image_embeds = self.image_encoder(
+                clip_image.to(device, dtype=self.image_encoder.dtype)
+            ).image_embeds
+            ref_image_tensor = self.ref_image_processor.preprocess(
+                ref_image, height=height, width=width
+            )  # (bs, c, width, height)
+            ref_image_tensor = ref_image_tensor.to(
+                dtype=self.vae.dtype, device=device
+            )
+            ref_image_latents = self.vae.encode(ref_image_tensor).latent_dist.mean
+            ref_image_latents = ref_image_latents * 0.18215  # (b, 4, h, w)
+            encoder_hidden_states = clip_image_embeds.unsqueeze(1)
+
+        uncond_encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
+
+        if do_classifier_free_guidance:
+            encoder_hidden_states = torch.cat(
+                [uncond_encoder_hidden_states, encoder_hidden_states], dim=0
+            )
+
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
             num_channels_latents,
             width,
             height,
             video_length,
-            clip_image_embeds.dtype,
+            self.image_encoder.dtype,
             device,
             generator,
         )
-
-        # Prepare extra step kwargs.
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
-        # Prepare ref image latents
-        ref_image_tensor = self.ref_image_processor.preprocess(
-            ref_image, height=height, width=width
-        )  # (bs, c, width, height)
-        ref_image_tensor = ref_image_tensor.to(
-            dtype=self.vae.dtype, device=self.vae.device
-        )
-        ref_image_latents = self.vae.encode(ref_image_tensor).latent_dist.mean
-        ref_image_latents = ref_image_latents * 0.18215  # (b, 4, h, w)
 
         # Prepare a list of pose condition images
         pose_cond_tensor_list = []
@@ -455,6 +371,7 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
             )
             pose_cond_tensor = pose_cond_tensor.unsqueeze(2)  # (bs, c, 1, h, w)
             pose_cond_tensor_list.append(pose_cond_tensor)
+
         pose_cond_tensor = torch.cat(pose_cond_tensor_list, dim=2)  # (bs, c, t, h, w)
         
         pose_cond_tensor = pose_cond_tensor.to(
@@ -468,126 +385,126 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
             device=device, dtype=self.pose_guider.dtype
         )
 
-        context_scheduler = get_context_scheduler(context_schedule)
+        # Reference writer
+        for ref_latents in tqdm([ref_image_latents] if not animated_reference else ref_image_latents, desc="Forwarding Reference Images"):
+            self.reference_unet(
+                ref_latents.repeat(
+                    (2 if do_classifier_free_guidance else 1), 1, 1, 1
+                ),
+                torch.zeros_like(timesteps[0]),
+                # t,
+                encoder_hidden_states=encoder_hidden_states,
+                return_dict=False,
+            )
+
+        reference_control_reader.update(reference_control_writer)
 
         # denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                noise_pred = torch.zeros(
-                    (
-                        latents.shape[0] * (2 if do_classifier_free_guidance else 1),
-                        *latents.shape[1:],
-                    ),
-                    device=latents.device,
-                    dtype=latents.dtype,
-                )
-                counter = torch.zeros(
-                    (1, 1, latents.shape[2], 1, 1),
-                    device=latents.device,
-                    dtype=latents.dtype,
-                )
+        context_scheduler = get_context_scheduler(context_schedule)
+        for i, t in tqdm(list(enumerate(timesteps)), desc="Sampling"):
+            noise_pred = torch.zeros(
+                (
+                    latents.shape[0] * (2 if do_classifier_free_guidance else 1),
+                    *latents.shape[1:],
+                ),
+                device=latents.device,
+                dtype=latents.dtype,
+            )
+            counter = torch.zeros(
+                (1, 1, latents.shape[2], 1, 1),
+                device=latents.device,
+                dtype=latents.dtype,
+            )
 
-                # 1. Forward reference image
-                if i == 0:
-                    self.reference_unet(
-                        ref_image_latents.repeat(
-                            (2 if do_classifier_free_guidance else 1), 1, 1, 1
-                        ),
-                        torch.zeros_like(t),
-                        # t,
-                        encoder_hidden_states=encoder_hidden_states,
-                        return_dict=False,
-                    )
-                    reference_control_reader.update(reference_control_writer)
-
-                context_queue = list(
-                    context_scheduler(
-                        0,
-                        num_inference_steps,
-                        latents.shape[2],
-                        context_frames,
-                        context_stride,
-                        0,
-                    )
+            context_queue = list(
+                context_scheduler(
+                    0,
+                    num_inference_steps,
+                    latents.shape[2],
+                    context_frames,
+                    context_stride,
+                    0,
                 )
-                num_context_batches = math.ceil(len(context_queue) / context_batch_size)
+            )
+            num_context_batches = math.ceil(len(context_queue) / context_batch_size)
 
-                context_queue = list(
-                    context_scheduler(
-                        0,
-                        num_inference_steps,
-                        latents.shape[2],
-                        context_frames,
-                        context_stride,
-                        context_overlap,
-                    )
+            context_queue = list(
+                context_scheduler(
+                    0,
+                    num_inference_steps,
+                    latents.shape[2],
+                    context_frames,
+                    context_stride,
+                    context_overlap,
+                )
+            )
+
+            num_context_batches = math.ceil(len(context_queue) / context_batch_size)
+            global_context = []
+            for i in range(num_context_batches):
+                global_context.append(
+                    context_queue[
+                        i * context_batch_size : (i + 1) * context_batch_size
+                    ]
                 )
 
-                num_context_batches = math.ceil(len(context_queue) / context_batch_size)
-                global_context = []
-                for i in range(num_context_batches):
-                    global_context.append(
-                        context_queue[
-                            i * context_batch_size : (i + 1) * context_batch_size
-                        ]
-                    )
+            for context in global_context:
+                # 3.1 expand the latents if we are doing classifier free guidance
+                latent_model_input = (
+                    torch.cat([latents[:, :, c] for c in context])
+                    .to(device)
+                    .repeat(2 if do_classifier_free_guidance else 1, 1, 1, 1, 1)
+                )
+                latent_model_input = self.scheduler.scale_model_input(
+                    latent_model_input, t
+                )
+                b, c, f, h, w = latent_model_input.shape
+                
+                pose_cond_input = (
+                    torch.cat([pose_cond_tensor[:, :, c] for c in context])
+                    .to(device)
+                    .repeat(2 if do_classifier_free_guidance else 1, 1, 1, 1, 1)
+                )
+                pose_fea = self.pose_guider(pose_cond_input, ref_pose_tensor)
 
-                for context in global_context:
-                    # 3.1 expand the latents if we are doing classifier free guidance
-                    latent_model_input = (
-                        torch.cat([latents[:, :, c] for c in context])
-                        .to(device)
-                        .repeat(2 if do_classifier_free_guidance else 1, 1, 1, 1, 1)
-                    )
-                    latent_model_input = self.scheduler.scale_model_input(
-                        latent_model_input, t
-                    )
-                    b, c, f, h, w = latent_model_input.shape
-                    
-                    pose_cond_input = (
-                        torch.cat([pose_cond_tensor[:, :, c] for c in context])
-                        .to(device)
-                        .repeat(2 if do_classifier_free_guidance else 1, 1, 1, 1, 1)
-                    )
-                    pose_fea = self.pose_guider(pose_cond_input, ref_pose_tensor)
+                pred = self.denoising_unet(
+                    latent_model_input,
+                    t,
+                    encoder_hidden_states=encoder_hidden_states[:b, context].mean(1) if animated_reference else encoder_hidden_states[:b],
+                    pose_cond_fea=pose_fea,
+                    context_frames=context,
+                    return_dict=False,
+                )[0]
 
-                    pred = self.denoising_unet(
-                        latent_model_input,
-                        t,
-                        encoder_hidden_states=encoder_hidden_states[:b],
-                        pose_cond_fea=pose_fea,
-                        return_dict=False,
-                    )[0]
+                for j, c in enumerate(context):
+                    noise_pred[:, :, c] = noise_pred[:, :, c] + pred
+                    counter[:, :, c] = counter[:, :, c] + 1
 
-                    for j, c in enumerate(context):
-                        noise_pred[:, :, c] = noise_pred[:, :, c] + pred
-                        counter[:, :, c] = counter[:, :, c] + 1
+            # perform guidance
+            if do_classifier_free_guidance:
+                noise_pred_uncond, noise_pred_text = (noise_pred / counter).chunk(2)
+                noise_pred = noise_pred_uncond + guidance_scale * (
+                    noise_pred_text - noise_pred_uncond
+                )
 
-                # perform guidance
-                if do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = (noise_pred / counter).chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (
-                        noise_pred_text - noise_pred_uncond
-                    )
+            latents = self.scheduler.step(
+                noise_pred, t, latents, **extra_step_kwargs
+            ).prev_sample
 
-                latents = self.scheduler.step(
-                    noise_pred, t, latents, **extra_step_kwargs
-                ).prev_sample
+            if i == len(timesteps) - 1 or (
+                (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+            ):
+                if callback is not None and i % callback_steps == 0:
+                    step_idx = i // getattr(self.scheduler, "order", 1)
+                    callback(step_idx, t, latents)
 
-                if i == len(timesteps) - 1 or (
-                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                ):
-                    progress_bar.update()
-                    if callback is not None and i % callback_steps == 0:
-                        step_idx = i // getattr(self.scheduler, "order", 1)
-                        callback(step_idx, t, latents)
-
-            reference_control_reader.clear()
-            reference_control_writer.clear()
+        reference_control_reader.clear()
+        reference_control_writer.clear()
 
         if interpolation_factor > 0:
             latents = self.interpolate_latents(latents, interpolation_factor, device)
+
         # Post-processing
         images = self.decode_latents(latents)  # (b, c, f, h, w)
 
@@ -596,6 +513,9 @@ class Pose2LongVideoPipeline(DiffusionPipeline):
             images = torch.from_numpy(images)
             if output_type == "pil":
                 images = self.images_from_video(images)
+
+        # Free model hooks
+        self.maybe_free_model_hooks()
 
         if not return_dict:
             return images

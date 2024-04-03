@@ -406,6 +406,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         attention_mask: Optional[torch.Tensor] = None,
         down_block_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         mid_block_additional_residual: Optional[torch.Tensor] = None,
+        context_frames: Optional[List[int]]=None,
         return_dict: bool = True,
     ) -> Union[UNet3DConditionOutput, Tuple]:
         r"""
@@ -498,12 +499,14 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
+                    context_frames=context_frames,
                 )
             else:
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
+                    context_frames=context_frames,
                 )
             if pose_cond_fea is not None:
                 sample = sample + pose_cond_fea[block_count]
@@ -529,6 +532,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             emb,
             encoder_hidden_states=encoder_hidden_states,
             attention_mask=attention_mask,
+            context_frames=context_frames,
         )
 
         if mid_block_additional_residual is not None:
@@ -559,6 +563,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
+                    context_frames=context_frames,
                 )
             else:
                 sample = upsample_block(
@@ -567,6 +572,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     res_hidden_states_tuple=res_samples,
                     upsample_size=upsample_size,
                     encoder_hidden_states=encoder_hidden_states,
+                    context_frames=context_frames,
                 )
 
         # post-process

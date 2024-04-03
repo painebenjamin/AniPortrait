@@ -81,10 +81,11 @@ class VanillaTemporalModule(nn.Module):
         encoder_hidden_states,
         attention_mask=None,
         anchor_frame_idx=None,
+        context_frames=None,
     ):
         hidden_states = input_tensor
         hidden_states = self.temporal_transformer(
-            hidden_states, encoder_hidden_states, attention_mask
+            hidden_states, encoder_hidden_states, attention_mask, context_frames=context_frames
         )
 
         output = hidden_states
@@ -143,7 +144,7 @@ class TemporalTransformer3DModel(nn.Module):
         )
         self.proj_out = nn.Linear(inner_dim, in_channels)
 
-    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None, context_frames=None):
         assert (
             hidden_states.dim() == 5
         ), f"Expected hidden_states to have ndim=5, but got ndim={hidden_states.dim()}."
@@ -166,6 +167,7 @@ class TemporalTransformer3DModel(nn.Module):
                 hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 video_length=video_length,
+                context_frames=context_frames,
             )
 
         # output
@@ -239,6 +241,7 @@ class TemporalTransformerBlock(nn.Module):
         encoder_hidden_states=None,
         attention_mask=None,
         video_length=None,
+        context_frames=None,
     ):
         for attention_block, norm in zip(self.attention_blocks, self.norms):
             norm_hidden_states = norm(hidden_states)

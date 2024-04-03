@@ -1,8 +1,12 @@
+from __future__ import annotations
+
+from typing import Mapping, Optional
+
 import cv2
 import mediapipe as mp
 import numpy as np
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from mediapipe.framework.formats import landmark_pb2
 
@@ -262,3 +266,32 @@ class FaceMeshVisualizer:
         # draw_pupils(image, face_landmarks, iris_landmark_spec, 2)
         image = cv2.resize(image, (image_size[0], image_size[1]))
         return Image.fromarray(image)
+
+    def draw_face_mask(self, image_size, keypoints, normed=False):
+        """
+        Creates a segmentation mask for the face using facial landmarks.
+        """
+        landmarks = []
+        ini_size = [512, 512]
+        image_width, image_height = image_size
+
+        for i in range(keypoints.shape[0]):
+            if normed:
+                x, y = keypoints[i, 0], keypoints[i, 1]
+            else:
+                x = keypoints[i, 0] / image_width
+                y = keypoints[i, 1] / image_height
+
+            landmarks.append([
+                int(x * image_width),
+                int(y * image_height)
+            ])
+
+        image = np.zeros([image_height, image_width, 3], dtype=np.uint8)
+
+        cv2.fillPoly(
+            image,
+            pts=[cv2.convexHull(np.array(landmarks))],
+            color=(255, 255, 255)
+        )
+        return Image.fromarray(image).convert("L")
